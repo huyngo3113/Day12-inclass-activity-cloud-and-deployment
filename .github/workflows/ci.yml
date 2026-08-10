@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Static production-readiness checklist
+        run: python check_production_ready.py
+
+      - name: Build image
+        run: docker build -t cloud-ai-agent:ci .
+
+      - name: Run container and smoke test
+        run: |
+          docker run -d --name agent -p 8000:8000 \
+            -e APP_API_KEY=ci-demo-key-not-a-secret \
+            cloud-ai-agent:ci
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:8000/health && break
+            sleep 2
+          done
+          curl -sf http://localhost:8000/health
+          curl -sf http://localhost:8000/ready
+          curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ask \
+            -H "Content-Type: application/json" -d '{"question":"test"}' | grep 401
+          curl -sf -X POST http://localhost:8000/ask \
+            -H "Content-Type: application/json" -H "X-API-Key: ci-demo-key-not-a-secret" \
+            -d '{"question":"observability"}'
+          docker logs agent
+          docker rm -f agent
